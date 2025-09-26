@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # Python Backend
+  backend:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    container_name: wordexcel-backend-prod
+    restart: unless-stopped
+    environment:
+      - PYTHONPATH=/app
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - uploads_data:/app/uploads
+      - temp_data:/app/temp
+    networks:
+      - wordexcel-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Don't expose ports directly in production
+    expose:
+      - "8000"
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ./python/frontend
+      dockerfile: Dockerfile
+    container_name: wordexcel-frontend-prod
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - wordexcel-network
+    # Don't expose ports directly in production
+    expose:
+      - "3000"
+
+  # Nginx Reverse Proxy with SSL
+  nginx:
+    image: nginx:alpine
+    container_name: wordexcel-nginx-prod
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - certbot_data:/var/www/certbot:ro
+      - ssl_certs:/etc/letsencrypt:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - wordexcel-network
+
+  # Certbot for SSL certificates
+  certbot:
+    image: certbot/certbot:latest
+    container_name: wordexcel-certbot
+    volumes:
+      - certbot_data:/var/www/certbot
+      - ssl_certs:/etc/letsencrypt
+    command: certonly --webroot --webroot-path=/var/www/certbot --email ${SSL_EMAIL} --agree-tos --no-eff-email -d ${DOMAIN}
+    depends_on:
+      - nginx
+
+networks:
+  wordexcel-network:
+    driver: bridge
+
+volumes:
+  uploads_data:
+    driver: local
+  temp_data:
+    driver: local
+  certbot_data:
+    driver: local
+  ssl_certs:
+    driver: local
